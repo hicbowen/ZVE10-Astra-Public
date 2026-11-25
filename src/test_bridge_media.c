@@ -1,6 +1,6 @@
 /**
  * @file test_bridge_media.c
- * @brief 单元测试：05_build_and_patch/g4host_bridge_media.h & g4host_bridge_usb.h (v31 全链路修复版)
+ * @brief 单元测试：05_build_and_patch/g4host_bridge_media.h & g4host_bridge_usb.h (v34 全链路修复版)
  */
 
 #ifndef _GNU_SOURCE
@@ -425,6 +425,111 @@ static void mock_orig_notify(void *self, uint32_t slot1, uint32_t slot2)
     g_mock_notify_slot2 = slot2;
 }
 
+static int      g_mock_dmm_alloc_calls = 0;
+static int      g_mock_dmm_close_calls = 0;
+static uint32_t g_mock_dmm_last_close_handle = 0u;
+static int      g_mock_dcf_remain_calls = 0;
+static int      g_mock_get_movie_remain_calls = 0;
+static int      g_mock_set_movie_rec_param_calls = 0;
+static int      g_mock_get_movie_rec_param_calls = 0;
+static int      g_mock_set_playback_param_calls = 0;
+static int      g_mock_calc_movie_remain_calls = 0;
+static int      g_mock_sidb_get_remain_calls = 0;
+static uint8_t  g_mock_last_movie_rec_param[G4MEDIA_MOVIE_REC_PARAM_SIZE] = {0};
+static uint8_t  g_mock_last_movie_remain_in[G4MEDIA_MOVIE_REMAIN_IN_SIZE] = {0};
+static uint8_t  g_mock_seed_get_movie_rec_param[G4MEDIA_MOVIE_REC_PARAM_SIZE] = {0};
+
+static void *mock_orig_dmm_alloc_null(uint32_t unit_type, uint32_t a1, uint32_t cmd, uint32_t a3,
+                                      void *out_unit, uint32_t flag, void *p_munmap)
+{
+    (void)unit_type; (void)a1; (void)cmd; (void)a3; (void)out_unit; (void)flag; (void)p_munmap;
+    g_mock_dmm_alloc_calls++;
+    return NULL;
+}
+
+static int mock_orig_dmm_close_and_free(uint32_t unit_handle)
+{
+    g_mock_dmm_close_calls++;
+    g_mock_dmm_last_close_handle = unit_handle;
+    return 0;
+}
+
+static int mock_orig_dcf_load(uint32_t slot_idx, uint32_t enable, const void *dir_str, uint32_t r3, uint32_t sp0)
+{
+    (void)slot_idx; (void)enable; (void)dir_str; (void)r3; (void)sp0;
+    return 0;
+}
+
+static uint32_t mock_orig_dcf_remain(const void *slot_mask_arr, uint32_t mode, void *out_arr)
+{
+    (void)slot_mask_arr; (void)mode; (void)out_arr;
+    g_mock_dcf_remain_calls++;
+    return 42u;
+}
+
+static int mock_orig_get_movie_remain(const void *in_param, void *out_param)
+{
+    g_mock_get_movie_remain_calls++;
+    if (in_param) {
+        memcpy(g_mock_last_movie_remain_in, in_param, sizeof(g_mock_last_movie_remain_in));
+    }
+    if (out_param) {
+        g4media_wr32((uint8_t *)out_param + 0x00u, 0u);
+        g4media_wr32((uint8_t *)out_param + 0x04u, 75u);
+    }
+    return 0;
+}
+
+static int mock_orig_set_movie_rec_param(const void *param)
+{
+    g_mock_set_movie_rec_param_calls++;
+    if (param) {
+        memcpy(g_mock_last_movie_rec_param, param, sizeof(g_mock_last_movie_rec_param));
+    }
+    return 0;
+}
+
+static int mock_orig_get_movie_rec_param(void *out_param)
+{
+    g_mock_get_movie_rec_param_calls++;
+    if (out_param) {
+        memcpy(out_param, g_mock_seed_get_movie_rec_param, sizeof(g_mock_seed_get_movie_rec_param));
+    }
+    return 0;
+}
+
+static int mock_orig_set_playback_param(const void *param)
+{
+    (void)param;
+    g_mock_set_playback_param_calls++;
+    return 0;
+}
+
+static int mock_orig_get_movie_rec_status_internal(void *out_param)
+{
+    if (out_param) {
+        memset(out_param, 0, 0x88u);
+        g4media_wr32((uint8_t *)out_param + 0x10u, 88u);
+        g4media_wr32((uint8_t *)out_param + 0x50u, 0x1u);
+    }
+    return 0;
+}
+
+static int mock_orig_calc_movie_remain(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3;
+    g_mock_calc_movie_remain_calls++;
+    return 0;
+}
+
+static int mock_orig_sidb_get_remain(uint32_t slot_id, uint32_t content_type, uint32_t *out_remain)
+{
+    (void)slot_id; (void)content_type;
+    g_mock_sidb_get_remain_calls++;
+    if (out_remain) *out_remain = 1234u;
+    return 0;
+}
+
 static void reset_bridge_state(void)
 {
     g4media_bridge_initialized = 0u;
@@ -454,10 +559,40 @@ static void reset_bridge_state(void)
     g4media_orig_mpr_init = NULL;
     g4media_orig_mpr_load = NULL;
     g4media_orig_mpr_set_issue_event = NULL;
+    g4media_orig_mpr_get_movie_remain = NULL;
+    g4media_orig_mpr_set_movie_rec_param = NULL;
+    g4media_orig_mpr_get_movie_rec_param = NULL;
+    g4media_orig_mpr_set_playback_param = NULL;
+    g4media_orig_mpr_get_movie_rec_status_internal = NULL;
+    g4media_orig_calc_movie_remain = NULL;
+    g4media_orig_sidb_get_remain = NULL;
+    g4media_orig_dmm_alloc_core = NULL;
+    g4media_orig_dmm_close_and_free = NULL;
+    g4media_orig_dcf_load = NULL;
+    g4media_orig_dcf_remain_folders = NULL;
+    g4media_mp5_base = 0u;
+    g4media_cfys_log_budget = 256u;
+    g4media_movie_diag_budget = 96u;
+    g4media_drive_raw_logged = 0u;
+    memset(g4media_dmm_slots, 0, sizeof(g4media_dmm_slots));
+    g4media_dmm_lock = 0u;
     g_mock_mpr_init_calls = 0;
     g_mock_mpr_load_calls = 0;
     g_mock_mpr_evt_calls = 0;
     g_mock_mpr_last_evt = 0u;
+    g_mock_dmm_alloc_calls = 0;
+    g_mock_dmm_close_calls = 0;
+    g_mock_dmm_last_close_handle = 0u;
+    g_mock_dcf_remain_calls = 0;
+    g_mock_get_movie_remain_calls = 0;
+    g_mock_set_movie_rec_param_calls = 0;
+    g_mock_get_movie_rec_param_calls = 0;
+    g_mock_set_playback_param_calls = 0;
+    g_mock_calc_movie_remain_calls = 0;
+    g_mock_sidb_get_remain_calls = 0;
+    memset(g_mock_last_movie_rec_param, 0, sizeof(g_mock_last_movie_rec_param));
+    memset(g_mock_last_movie_remain_in, 0, sizeof(g_mock_last_movie_remain_in));
+    memset(g_mock_seed_get_movie_rec_param, 0, sizeof(g_mock_seed_get_movie_rec_param));
     g_mock_in_cb_calls = 0u;
     memset(g_mock_in_ev, 0, sizeof(g_mock_in_ev));
     g_g4usb_cached_slot1_media_id = 0x1000u;
@@ -597,8 +732,9 @@ int main(void)
     TEST_ASSERT(s_tramp_count == 16);
     TEST_ASSERT(s_patch_jump_count == 1);
     TEST_ASSERT(*(uint32_t *)(fake_app + G4MEDIA_OFF_GET_STATUS_CMD_LIT) == G4MEDIA_CMD_GET_STATUS_G4);
-    TEST_ASSERT(*(uint16_t *)(fake_app + G4MEDIA_OFF_ALLOW_REC_BNE) == 0xbf00u);
-    printf("[PASS 3] 16 个跳板装载 (含 InitMedia)、GetStatus 0x11002->0x11003 及 allowRecord Patch\n");
+    /* v36 撤回 0x02b8af5e bne->NOP 补丁，保留原厂指令防止走双卡分支 */
+    TEST_ASSERT(*(uint16_t *)(fake_app + G4MEDIA_OFF_ALLOW_REC_BNE) == 0xd10au);
+    printf("[PASS 3] 16 个跳板装载 (含 InitMedia)、GetStatus 0x11002->0x11003 及 0x02b8af5e 原指令保留通过\n");
 
     /* 4. QEMU/无 libInfraFsys.so 模式行为验证 (绝不伪造卡，空槽联锁返回 0) */
     g4media_orig_notify_media_status = mock_orig_notify;
@@ -718,7 +854,8 @@ int main(void)
 
     g4media_get_status_out_t st_out;
     g4media_hook_get_status(&mid_sd, &st_out);
-    TEST_ASSERT(st_out.status == 0u && st_out.mounted == 1u);
+    /* Fsys_Mount 尚未完成分配真实盘符时，GetStatus 不得提前伪报 mounted=1 */
+    TEST_ASSERT(st_out.mounted == 0u);
 
     g4media_hook_cmd_11009(&mid_sd, &out9);
     TEST_ASSERT(out9.status == 0u && out9.ok_flag == 1u);
@@ -749,6 +886,10 @@ int main(void)
     g4media_fsys_mount_in_t fin_wrong = { "/dev/mmca", 1u, {0} };
     g4media_hook_fsys_mount(&fin_wrong, &fout);
     TEST_ASSERT(fout.status == 0u && fout.drv_letter == 'A');
+
+    /* Fsys_Mount 完成后，GetStatus 应基于真实盘符 'A' 补全 status=0 && mounted=1 */
+    g4media_hook_get_status(&mid_sd, &st_out);
+    TEST_ASSERT(st_out.status == 0u && st_out.mounted == 1u);
 
     uint8_t drv = 0u;
     g4media_fsys_devname_in_t dname_in = { name_buf };
@@ -1049,8 +1190,8 @@ int main(void)
     g4media_orig_mpr_set_issue_event = mock_real_mpr_set_issue_event;
     g4media_install_c_fsys_got_hooks(0x10000000u, 0x20000000u, 0x30000000u);
     g4media_custom_got_hook_cb = NULL;
-    /* libmp5 (6 + 15 + 1 SetIssueEvent) + libOb5 (11) + appFw (11 + 2 mpr) = 46 GOT slots */
-    TEST_ASSERT(g_mock_got_rec_cnt == 46u);
+    /* libmp5 (6 + 15 + 1 SetIssueEvent + 1 GetMovieRecParam) + libOb5 (11) + appFw (11 + 5 mpr) = 50 GOT slots */
+    TEST_ASSERT(g_mock_got_rec_cnt == 50u);
 
     uint8_t fake_load_param[0x30];
     memset(fake_load_param, 0, sizeof(fake_load_param));
@@ -1092,7 +1233,223 @@ int main(void)
     TEST_ASSERT(g_mock_mpr_evt_calls == 1 && g_mock_mpr_last_evt == 0x1002u);
     printf("[PASS 13] v31 Open 错误码转换、Chmod/Read/Write/WriteAndFlush 与 SetIssueEvent(0x1002) 通过\n");
 
+    /* 14. v32 DMM unit_type=0x660 回退分配/释放 与 DcfNamer::GetRemainSlotFolders 空指针防崩护栏 */
+    reset_bridge_state();
+    g4media_orig_dmm_alloc_core     = mock_orig_dmm_alloc_null;
+    g4media_orig_dmm_close_and_free = mock_orig_dmm_close_and_free;
+    g4media_orig_dcf_load           = mock_orig_dcf_load;
+    g4media_orig_dcf_remain_folders = mock_orig_dcf_remain;
+
+    uint8_t out_unit[0x60];
+    memset(out_unit, 0xaau, sizeof(out_unit));
+    void *dmm_buf = g4media_hook_dmm_alloc_core(0x660u, 0u, 1u, 1u, out_unit, 1u, NULL);
+    TEST_ASSERT(dmm_buf != NULL && g_mock_dmm_alloc_calls == 1);
+    uint16_t synth_handle = g4media_rd16(out_unit + 0x04u);
+    TEST_ASSERT(synth_handle == 0x7f00u);
+    TEST_ASSERT(g4media_rd32(out_unit + 0x0cu) == 0x660u);
+    TEST_ASSERT(g4media_rd32(out_unit + 0x10u) == 0x00113898u);
+    TEST_ASSERT(g4media_rd32(out_unit + 0x50u) == (uint32_t)(uintptr_t)dmm_buf);
+    TEST_ASSERT(((volatile uint8_t *)dmm_buf)[0] == 0u && ((volatile uint8_t *)dmm_buf)[0x113897u] == 0u);
+    ((volatile uint8_t *)dmm_buf)[0x4e2u] = 0x5au;
+    TEST_ASSERT(((volatile uint8_t *)dmm_buf)[0x4e2u] == 0x5au);
+
+    /* 非 0x660 类型或非 cmd=1 失败不伪造分配 */
+    TEST_ASSERT(g4media_hook_dmm_alloc_core(0x661u, 0u, 1u, 1u, out_unit, 1u, NULL) == NULL);
+
+    /* 合成句柄走 close_and_free 自动 munmap，不透传给 Gen4 驱动；普通句柄正常透传 */
+    TEST_ASSERT(g4media_hook_dmm_close_and_free(synth_handle) == 0);
+    TEST_ASSERT(g_mock_dmm_close_calls == 0);
+    TEST_ASSERT(g4media_dmm_slots[0].in_use == 0u);
+    TEST_ASSERT(g4media_hook_dmm_close_and_free(0x1234u) == 0);
+    TEST_ASSERT(g_mock_dmm_close_calls == 1 && g_mock_dmm_last_close_handle == 0x1234u);
+
+    /* DcfNamer::GetRemainSlotFolders 空指针保护 */
+    uint8_t *fake_mp5 = (uint8_t *)mmap(NULL, 0x290000u, PROT_READ | PROT_WRITE,
+                                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *fake_slots = (uint8_t *)mmap(NULL, G4MEDIA_DCF_SLOT_COUNT * G4MEDIA_DCF_SLOT_STRIDE,
+                                          PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    TEST_ASSERT(fake_mp5 != MAP_FAILED && fake_slots != MAP_FAILED);
+    *(uintptr_t *)(fake_mp5 + 0x002877a0u) = (uintptr_t)fake_slots;
+    g4media_mp5_base = (uintptr_t)fake_mp5;
+
+    fake_slots[0] = 1u; /* slot 0: loaded=1 但 files_ptr(0x6c)=NULL -> 应被清除 */
+    g4media_wr32(fake_slots + 0x6cu, 0u);
+    uint8_t *slot1 = fake_slots + G4MEDIA_DCF_SLOT_STRIDE;
+    slot1[0] = 1u;      /* slot 1: loaded=1 且 files_ptr 非空 -> 应保持 */
+    g4media_wr32(slot1 + 0x6cu, 0x12345678u);
+    g4media_wr16(slot1 + 0x74u, 3u);
+
+    TEST_ASSERT(g4media_hook_dcf_load(1u, 1u, NULL, 0u, 0u) == 0);
+    TEST_ASSERT(g4media_hook_dcf_remain_folders(NULL, 0u, NULL) == 42u);
+    TEST_ASSERT(g_mock_dcf_remain_calls == 1);
+    TEST_ASSERT(fake_slots[0] == 0u);
+    TEST_ASSERT(slot1[0] == 1u);
+
+    munmap(fake_slots, G4MEDIA_DCF_SLOT_COUNT * G4MEDIA_DCF_SLOT_STRIDE);
+    munmap(fake_mp5, 0x290000u);
+    printf("[PASS 14] v32 DMM 0x660 回退分配/释放 与 DcfNamer 空指针护栏全部通过\n");
+
+    /* 15. v33 MovieRemain / SetMovieRecParam / SetPlaybackParam / CalcMovieRemain / sidb::GetRemain 探针透传测试 */
+    reset_bridge_state();
+    g4media_orig_mpr_set_issue_event               = mock_real_mpr_set_issue_event;
+    g4media_orig_mpr_get_movie_remain              = mock_orig_get_movie_remain;
+    g4media_orig_mpr_set_movie_rec_param           = mock_orig_set_movie_rec_param;
+    g4media_orig_mpr_set_playback_param            = mock_orig_set_playback_param;
+    g4media_orig_mpr_get_movie_rec_status_internal = mock_orig_get_movie_rec_status_internal;
+    g4media_orig_calc_movie_remain                 = mock_orig_calc_movie_remain;
+    g4media_orig_sidb_get_remain                   = mock_orig_sidb_get_remain;
+
+    uint8_t mov_in[G4MEDIA_MOVIE_REMAIN_IN_SIZE] = {0}, mov_out[24] = {0}, rec_p[G4MEDIA_MOVIE_REC_PARAM_SIZE] = {0}, pb_p[16] = {0}, evt4[16] = {0};
+    g4media_wr32(mov_in, 4096u);
+    TEST_ASSERT(g4media_wrap_mpr_get_movie_remain(mov_in, mov_out) == 0);
+    TEST_ASSERT(g_mock_get_movie_remain_calls == 1 && g4media_rd32(mov_out + 0x04u) == 75u);
+    TEST_ASSERT(g4media_wrap_mpr_set_movie_rec_param(rec_p) == 0 && g_mock_set_movie_rec_param_calls == 1);
+    TEST_ASSERT(g4media_wrap_mpr_set_playback_param(pb_p) == 0 && g_mock_set_playback_param_calls == 1);
+    TEST_ASSERT(g4media_hook_calc_movie_remain(0u, 0u, 0u, 0u) == 0 && g_mock_calc_movie_remain_calls == 1);
+    uint32_t sidb_rem = 0u;
+    TEST_ASSERT(g4media_hook_sidb_get_remain(4096u, 4u, &sidb_rem) == 0 && g_mock_sidb_get_remain_calls == 1 && sidb_rem == 1234u);
+    TEST_ASSERT(g4media_wrap_mpr_set_issue_event(0x1004u, evt4, sizeof(evt4)) == 0 && g_mock_mpr_last_evt == 0x1004u);
+    printf("[PASS 15] v33 MovieRemain / SetMovieRecParam / SetPlaybackParam / CalcMovieRemain / sidb::GetRemain 探针通过\n");
+
+    /* 16. v34 MovieRecParam / GetMovieRecParam / GetMovieRemain 码率与音频参数规范化测试 */
+    reset_bridge_state();
+    g4media_orig_mpr_set_movie_rec_param = mock_orig_set_movie_rec_param;
+    g4media_orig_mpr_get_movie_rec_param = mock_orig_get_movie_rec_param;
+    g4media_orig_mpr_get_movie_remain    = mock_orig_get_movie_remain;
+
+    TEST_ASSERT(g4media_video_bitrate_kbps(0u) == 0u);
+    TEST_ASSERT(g4media_video_bitrate_kbps(1u) == 0u);
+    TEST_ASSERT(g4media_video_bitrate_kbps(5u) == 0u);
+    TEST_ASSERT(g4media_video_bitrate_kbps(9u) == 0u);
+    TEST_ASSERT(g4media_video_bitrate_kbps(0x36u) == 0u);
+    TEST_ASSERT(g4media_video_bitrate_kbps(0x0eu) == 50000u);
+    TEST_ASSERT(g4media_video_bitrate_kbps(0x11u) == 600000u);
+    TEST_ASSERT(g4media_video_bitrate_kbps(0x1au) == 9000u);
+
+    /* (a) 合法参数应原样保留，一字节不改 */
+    uint8_t valid_rec[G4MEDIA_MOVIE_REC_PARAM_SIZE];
+    memset(valid_rec, 0, sizeof(valid_rec));
+    g4media_wr32(valid_rec + 0x04u, 0x1000u);
+    valid_rec[0x24u] = 1u; /* allowRecord=1, relay/simul/isolate/sub156=0 才是合法单卡参数 */
+    g4media_wr32(valid_rec + 0x128u, 3u);
+    g4media_wr32(valid_rec + 0x12cu, 0x11u);
+    g4media_wr32(valid_rec + 0x130u, 2u);
+    g4media_wr32(valid_rec + 0x13cu, 1u);
+    g4media_wr32(valid_rec + 0x140u, 2u);
+    valid_rec[0x156u] = 0u;
+    g4media_wr32(valid_rec + 0x158u, 2u);
+    g4media_wr32(valid_rec + 0x15cu, 0x1au);
+    g4media_wr32(valid_rec + 0x160u, 6u);
+    g4media_wr32(valid_rec + 0x16cu, 3u);
+    g4media_wr32(valid_rec + 0x170u, 1u);
+    TEST_ASSERT(g4media_wrap_mpr_set_movie_rec_param(valid_rec) == 0);
+    TEST_ASSERT(memcmp(g_mock_last_movie_rec_param, valid_rec, sizeof(valid_rec)) == 0);
+
+    /* (b) 全零主视频+开启 simulRec 但 sub_VQuality=0 场景 -> 必须规范化到有效表项 */
+    uint8_t bad_rec[G4MEDIA_MOVIE_REC_PARAM_SIZE];
+    memset(bad_rec, 0, sizeof(bad_rec));
+    g4media_wr32(bad_rec + 0x04u, 0x1000u);
+    bad_rec[0x0cu] = 1u;
+    bad_rec[0x156u] = 1u;
+    TEST_ASSERT(g4media_wrap_mpr_set_movie_rec_param(bad_rec) == 0);
+    TEST_ASSERT(g4media_video_bitrate_kbps(g4media_rd32(g_mock_last_movie_rec_param + 0x12cu)) > 0u);
+    TEST_ASSERT(g4media_is_valid_audio_param(g4media_rd32(g_mock_last_movie_rec_param + 0x13cu),
+                                             g4media_rd32(g_mock_last_movie_rec_param + 0x140u)) == 1);
+    TEST_ASSERT(g4media_video_bitrate_kbps(g4media_rd32(g_mock_last_movie_rec_param + 0x15cu)) > 0u);
+    TEST_ASSERT(g4media_is_valid_audio_param(g4media_rd32(g_mock_last_movie_rec_param + 0x16cu),
+                                             g4media_rd32(g_mock_last_movie_rec_param + 0x170u)) == 1);
+
+    /* (c) GetMovieRecParam 返回 InitMovieRecParam 默认 0xff/5/0xff 时应就地修复 */
+    memset(g_mock_seed_get_movie_rec_param, 0, sizeof(g_mock_seed_get_movie_rec_param));
+    g4media_wr32(g_mock_seed_get_movie_rec_param + 0x128u, 0xcu);
+    g4media_wr32(g_mock_seed_get_movie_rec_param + 0x12cu, 0xffu);
+    g4media_wr32(g_mock_seed_get_movie_rec_param + 0x130u, 0xcu);
+    g4media_wr32(g_mock_seed_get_movie_rec_param + 0x13cu, 5u);
+    g4media_wr32(g_mock_seed_get_movie_rec_param + 0x140u, 0xffu);
+    uint8_t got_rec[G4MEDIA_MOVIE_REC_PARAM_SIZE];
+    memset(got_rec, 0, sizeof(got_rec));
+    TEST_ASSERT(g4media_wrap_mpr_get_movie_rec_param(got_rec) == 0 && g_mock_get_movie_rec_param_calls == 1);
+    TEST_ASSERT(g4media_rd32(got_rec + 0x128u) < 0xcu);
+    TEST_ASSERT(g4media_video_bitrate_kbps(g4media_rd32(got_rec + 0x12cu)) > 0u);
+    TEST_ASSERT(g4media_rd32(got_rec + 0x130u) < 0xcu);
+    TEST_ASSERT(g4media_is_valid_audio_param(g4media_rd32(got_rec + 0x13cu), g4media_rd32(got_rec + 0x140u)) == 1);
+
+    /* (d) GetMovieRemain 输入规范化 */
+    uint8_t bad_min[G4MEDIA_MOVIE_REMAIN_IN_SIZE];
+    memset(bad_min, 0, sizeof(bad_min));
+    g4media_wr32(bad_min + 0x04u, 0x1000u);
+    bad_min[0x20u] = 1u;
+    TEST_ASSERT(g4media_wrap_mpr_get_movie_remain(bad_min, mov_out) == 0);
+    TEST_ASSERT(g4media_video_bitrate_kbps(g4media_rd32(g_mock_last_movie_remain_in + 0x14u)) > 0u);
+    TEST_ASSERT(g4media_is_valid_audio_param(g4media_rd32(g_mock_last_movie_remain_in + 0x18u),
+                                             g4media_rd32(g_mock_last_movie_remain_in + 0x1cu)) == 1);
+    TEST_ASSERT(g4media_video_bitrate_kbps(g4media_rd32(g_mock_last_movie_remain_in + 0x30u)) > 0u);
+    printf("[PASS 16] v34 MovieRecParam / GetMovieRecParam / GetMovieRemain 规范化全部通过\n");
+
+    /* 17. v35 GetStatus 真实盘符门槛校验：未挂载时绝不伪报 mounted=1，挂载分配 'A' 后正确补全 */
+    g4media_app_base = (uintptr_t)fake_app;
+    *(uint32_t *)(fake_app + G4MEDIA_OFF_MEDIA_CNT) = 2u;
+    g4media_set_slot1_media_id(0x1000u);
+    g4media_orig_get_status = NULL;
+    g4media_g4_fsys.available = 1;
+    g4media_g4_fsys.get_mount_drives = mock_g4_get_mount_drives;
+    g4media_g4_fsys.get_drive_letter = mock_g4_get_drive_letter;
+    g_mock_sd_inserted = 1;
+    g_mock_sd_mounted = 0;
+    g4media_get_status_out_t st_unmounted;
+    memset(&st_unmounted, 0, sizeof(st_unmounted));
+    st_unmounted.mounted = 1u;
+    g4media_hook_get_status(&mid_sd, &st_unmounted);
+    TEST_ASSERT(st_unmounted.mounted == 0u);
+
+    g4media_orig_get_status = mock_orig_get_status_zero;
+    g_mock_sd_mounted = 1;
+    g4media_get_status_out_t st_mounted;
+    g4media_hook_get_status(&mid_sd, &st_mounted);
+    TEST_ASSERT(st_mounted.status == 0u && st_mounted.mounted == 1u && st_mounted.badblk == 0u);
+    printf("[PASS 17] v35 GetStatus 真实盘符门槛校验通过\n");
+
+    /* 18. v36 单卡槽 MovieRecParam 精确位宽置位(不踩踏相邻字节) 与 libmp5 按值传参结构体尺寸/对齐断言 */
+    TEST_ASSERT(sizeof(g4media_mov_remain_in_val_t) == 0x3cu);
+    TEST_ASSERT(sizeof(g4media_movie_rec_val_t) == 0x188u);
+    TEST_ASSERT(_Alignof(g4media_movie_rec_val_t) == 8u);
+
+    uint8_t v36_rec[G4MEDIA_MOVIE_REC_PARAM_SIZE];
+    memset(v36_rec, 0, sizeof(v36_rec));
+    v36_rec[0x00u] = 1u; /* relayRec */
+    v36_rec[0x01u] = 0xa1u; v36_rec[0x02u] = 0xb2u; v36_rec[0x03u] = 0xc3u;
+    g4media_wr32(v36_rec + 0x04u, 0x1000u);
+    v36_rec[0x0cu] = 1u; /* simulRec */
+    v36_rec[0x0du] = 0xd4u;
+    v36_rec[0x24u] = 0u; /* allowRecord */
+    v36_rec[0x25u] = 0xe5u;
+    g4media_wr32(v36_rec + 0x28u, 2u); /* dual-slot mode */
+    v36_rec[0x38u] = 1u; /* isolate */
+    v36_rec[0x39u] = 0xf6u;
+    v36_rec[0x154u] = 0x5au;
+    v36_rec[0x155u] = 0x6bu;
+    v36_rec[0x156u] = 1u; /* sub156 */
+    v36_rec[0x157u] = 0x7cu;
+    g4media_wr32(v36_rec + 0x128u, 1u);
+    g4media_wr32(v36_rec + 0x12cu, 0x0eu);
+    g4media_wr32(v36_rec + 0x130u, 0u);
+    g4media_wr32(v36_rec + 0x13cu, 0u);
+    g4media_wr32(v36_rec + 0x140u, 2u);
+
+    memset(g_mock_last_movie_rec_param, 0, sizeof(g_mock_last_movie_rec_param));
+    TEST_ASSERT(g4media_wrap_mpr_set_movie_rec_param(v36_rec) == 0);
+    TEST_ASSERT(g_mock_last_movie_rec_param[0x00u] == 0u);
+    TEST_ASSERT(g_mock_last_movie_rec_param[0x01u] == 0xa1u && g_mock_last_movie_rec_param[0x02u] == 0xb2u && g_mock_last_movie_rec_param[0x03u] == 0xc3u);
+    TEST_ASSERT(g_mock_last_movie_rec_param[0x0cu] == 0u && g_mock_last_movie_rec_param[0x0du] == 0xd4u);
+    TEST_ASSERT(g_mock_last_movie_rec_param[0x24u] == 1u && g_mock_last_movie_rec_param[0x25u] == 0xe5u);
+    TEST_ASSERT(g4media_rd32(g_mock_last_movie_rec_param + 0x28u) == 0u);
+    TEST_ASSERT(g_mock_last_movie_rec_param[0x38u] == 0u && g_mock_last_movie_rec_param[0x39u] == 0xf6u);
+    TEST_ASSERT(g_mock_last_movie_rec_param[0x154u] == 0x5au && g_mock_last_movie_rec_param[0x155u] == 0x6bu);
+    TEST_ASSERT(g_mock_last_movie_rec_param[0x156u] == 0u && g_mock_last_movie_rec_param[0x157u] == 0x7cu);
+    TEST_ASSERT(g_mock_last_movie_remain_in[0x20u] == 0u);
+    printf("[PASS 18] v36 单卡 MovieRecParam 位宽保护与 AAPCS 结构体布局校验通过\n");
+
     munmap(fake_app, map_sz);
-    printf("=== 全部 13 项单元测试全部通过！===\n");
+    printf("=== 全部 18 项单元测试全部通过！===\n");
     return 0;
 }

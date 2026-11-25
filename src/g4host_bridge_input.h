@@ -28,6 +28,7 @@
 #include <sys/time.h>
 #include <string.h>
 #include <errno.h>
+#include <dlfcn.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -180,6 +181,71 @@ static void g4input_real_infra_input_cb(int channel, void *ev_ptr)
 }
 
 /**
+ * @brief 通过 dlsym + Thumb-2 指令文字池解码，跨底包版本只读解析四代输入单例指针
+ *
+ * 在四代 libObj.so 的 _ZN10InfraInput11GetInstanceEv / _ZN7InfraTp11GetInstanceEv 中，
+ * 静态单例槽位由固定 Thumb-2 序列读取：
+ *   ldr r3, [pc, #imm8] ; add r3, pc ; ldr r3, [r3] ; cbnz r3, ...
+ * 运行期动态解码文字池偏移，可统一兼容 2025-03 (0x14924b0/0x14924dc)、
+ * 2026-06 (后移 0x48 字节) 及其他批次底包，且不会误触发单例新建。
+ */
+static inline void *g4input_read_singleton_from_getinst(
+    void *hObj,
+    uintptr_t libobj_base,
+    const char *sym_name,
+    uint32_t fallback_fn_off,
+    uint32_t fallback_bss_off,
+    uintptr_t *out_slot_va)
+{
+    uintptr_t fn_addr = 0;
+    if (hObj) {
+        fn_addr = (uintptr_t)dlsym(hObj, sym_name);
+    }
+    if (!fn_addr) {
+        fn_addr = (uintptr_t)dlsym(RTLD_DEFAULT, sym_name);
+    }
+    if (!fn_addr && libobj_base && fallback_fn_off) {
+        fn_addr = libobj_base + fallback_fn_off;
+    }
+
+    uintptr_t slot_va = 0;
+    if (fn_addr && (fn_addr & 1u) != 0u) {
+        uintptr_t va = fn_addr & ~(uintptr_t)1u;
+        const uint16_t *code = (const uint16_t *)va;
+        for (size_t i = 0; i < 64u; i++) {
+            uint16_t hw0 = code[i];
+            uint16_t hw1 = code[i + 1u];
+            uint16_t hw2 = code[i + 2u];
+            uint16_t hw3 = code[i + 3u];
+            if ((hw0 & 0xff00u) == 0x4b00u && hw1 == 0x447bu &&
+                hw2 == 0x681bu && (hw3 & 0xfd07u) == 0xb903u) {
+                uintptr_t insn_va = va + i * 2u;
+                uint32_t imm8 = (uint32_t)(hw0 & 0xffu);
+                uintptr_t lit_va = ((insn_va + 4u) & ~(uintptr_t)3u) + imm8 * 4u;
+                uint32_t lit_val = *(const uint32_t *)lit_va;
+                uintptr_t add_pc = (va + (i + 1u) * 2u) + 4u;
+                uintptr_t cand = add_pc + (uintptr_t)(intptr_t)(int32_t)lit_val;
+                if (!libobj_base || (cand >= libobj_base + 0x01000000u && cand < libobj_base + 0x02000000u)) {
+                    slot_va = cand;
+                }
+                break;
+            }
+        }
+    }
+
+    if (!slot_va && libobj_base && fallback_bss_off) {
+        slot_va = libobj_base + fallback_bss_off;
+    }
+    if (out_slot_va) {
+        *out_slot_va = slot_va;
+    }
+    if (!slot_va) {
+        return NULL;
+    }
+    return *(void *volatile *)slot_va;
+}
+
+/**
  * @brief 模块 6 统一入口：初始化真机输入与触屏桥接层
  * 
  * @param libobj_base 四代 libObj.so 加载基址
@@ -198,16 +264,25 @@ static inline void init_bridge_input(uintptr_t libobj_base, uintptr_t app_base)
     /* 1. 触摸屏已交由五代 libOb5:InfraTp 原生接管，此处不再激活四代 libObj:InfraTp 防止状态机冲突 */
     logf_("[G4INPUT] 跳过四代 InfraTp 激活，交由五代 libOb5:InfraTp 原生独占接管触屏");
 
-    /* 2. 挂载四代底层 InfraInput 回调（确保真机物理按键中断 100% 接入） */
+    /* 2. 挂载四代底层 InfraInput 回调（优先 dlsym 解析，跨底包兼容） */
     typedef void *(*input_get_instance_fn_t)(void);
     typedef int (*input_set_callback_fn_t)(void *self, int *out_id, void (*cb)(int, void *));
 
-    input_get_instance_fn_t pInGetInstance = (input_get_instance_fn_t)(libobj_base + 0x8c22a1u);
-    input_set_callback_fn_t pInSetCallback = (input_set_callback_fn_t)(libobj_base + 0x8c2825u);
+    input_get_instance_fn_t pInGetInstance =
+        (input_get_instance_fn_t)dlsym(RTLD_DEFAULT, "_ZN10InfraInput11GetInstanceEv");
+    if (!pInGetInstance) {
+        pInGetInstance = (input_get_instance_fn_t)(libobj_base + 0x8c22a1u);
+    }
+    input_set_callback_fn_t pInSetCallback =
+        (input_set_callback_fn_t)dlsym(RTLD_DEFAULT, "_ZN10InfraInput11SetCallbackEPiPFviP16_InfraInputEventE");
+    if (!pInSetCallback) {
+        pInSetCallback = (input_set_callback_fn_t)(libobj_base + 0x8c2825u);
+    }
 
     void *pIn = pInGetInstance ? pInGetInstance() : NULL;
     if (!pIn) {
-        pIn = *(void *volatile *)(libobj_base + 0x014924dcu);
+        pIn = g4input_read_singleton_from_getinst(
+            NULL, libobj_base, "_ZN10InfraInput11GetInstanceEv", 0x8c22a1u, 0x014924dcu, NULL);
     }
 
     if (pIn && pInSetCallback) {

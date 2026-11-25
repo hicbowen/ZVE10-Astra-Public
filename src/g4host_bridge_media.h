@@ -1,6 +1,6 @@
 /**
  * @file g4host_bridge_media.h
- * @brief ZV-E10 四代宿主移植五代 ASTRA 跨代桥接层 —— 模块 2：存储与联锁层桥接实现 (v30 Fsys C-API/mpr 全链路对齐版)
+ * @brief ZV-E10 四代宿主移植五代 ASTRA 跨代桥接层 —— 模块 2：存储与联锁层桥接实现 (v34 录像 0min MovieRecParam 参数规范化与全链路诊断版)
  *
  * 根因与架构说明 (经实机日志、appFw.so 及四代 libObj.so/libInfraMediaDetect.so/libInfraFsys.so 二进制交叉实证)：
  * 1. 属性索引代际失配 (libObj.so @ 0x172760 vs libOb5.so @ 0x2a4180):
@@ -1329,14 +1329,14 @@ static void g4media_hook_get_status(uint32_t *media_id_in, g4media_get_status_ou
           media_id, out->status, (unsigned)out->mounted, (unsigned)out->badblk,
           (unsigned)out->wp, (unsigned)out->ro, out->drv_id);
 
-    uint8_t drv = 0u;
-    if (g4media_probe_phys_card_present_in_g4(media_id, NULL, 0u, &drv)) {
+    uint8_t real_drv = 0u;
+    if (g4media_probe_real_sd(media_id, NULL, 0u, &real_drv) && real_drv >= (uint8_t)'A' && real_drv <= (uint8_t)'Z') {
         if (out->status != 0u || out->mounted == 0u) {
             out->status = 0u;
             out->mounted = 1u;
             out->badblk = 0u;
-            logf_("G4_MEDIA: GetStatus(0x%x) 四代确认物理卡在线(drv=0x%02x)，补全 status=0 mounted=1",
-                  media_id, (unsigned)drv);
+            logf_("G4_MEDIA: GetStatus(0x%x) 四代 PrFILE2 真实挂载在线(drv='%c' 0x%02x)，补全 status=0 mounted=1",
+                  media_id, (char)real_drv, (unsigned)real_drv);
         }
         if (out->drv_id == 0u && g4media_app_base) {
             uint32_t cnt = *(const volatile uint32_t *)(g4media_app_base + G4MEDIA_OFF_MEDIA_CNT);
@@ -1350,6 +1350,11 @@ static void g4media_hook_get_status(uint32_t *media_id_in, g4media_get_status_ou
                 }
             }
         }
+    } else if (out->mounted != 0u) {
+        /* Fsys_Mount 尚未完成分配真实盘符时，禁止提前报 mounted=1，避免上层拿无效盘符调 GetFreeSpace(0x80000040) 与重复挂载 */
+        logf_("G4_MEDIA: GetStatus(0x%x) 真实盘符未就绪(real_drv=0x%02x)，保持 mounted=0 (原 status=%u mounted=%u)",
+              media_id, (unsigned)real_drv, out->status, (unsigned)out->mounted);
+        out->mounted = 0u;
     }
 }
 
@@ -1838,7 +1843,7 @@ static inline void init_bridge_media(uintptr_t app_base, uintptr_t mpr_base)
     g4media_mpr_base = mpr_base;
     (void)g4media_mpr_base;
 
-    logf_("G4_MEDIA: 初始化存储与联锁桥接层 (v31 DriveInfo标志位掩码与Open错误码对齐版, app_base=%p, mpr_base=%p)...",
+    logf_("G4_MEDIA: 初始化存储与联锁桥接层 (v33 MovieRemain 与 Playback 全链路诊断版, app_base=%p, mpr_base=%p)...",
           (void *)app_base, (void *)mpr_base);
 
     g4media_diagnose_storage_state("init");
@@ -1926,35 +1931,79 @@ static inline void init_bridge_media(uintptr_t app_base, uintptr_t mpr_base)
         logf_("G4_MEDIA_WARN: check_media_status @ %p 签名不匹配，安全跳过", (void *)check_media_va);
     }
 
-    /* mpr_SetMovieRecParam 单卡 allowRecord=1 解锁 */
-    uintptr_t allow_rec_bne_va = app_base + G4MEDIA_OFF_ALLOW_REC_BNE;
-    static const uint8_t sig_allow_rec_bne[4] = {0x0au, 0xd1u, 0x87u, 0xf8u};
-    if (memcmp((const void *)allow_rec_bne_va, sig_allow_rec_bne, sizeof(sig_allow_rec_bne)) == 0) {
-        g4media_patch_thumb16(allow_rec_bne_va, 0xbf00u, "mpr_SetMovieRecParam:force_allow_record");
-    } else {
-        logf_("G4_MEDIA_WARN: allow_rec_bne @ %p 签名不匹配，安全跳过", (void *)allow_rec_bne_va);
-    }
-
-    logf_("G4_MEDIA: 存储与联锁桥接层全部 Hook 与 Patch 装载完成 (v30 UIPC 桥接层就绪)");
+    /* v36 撤回 0x02b8af5e 强行改 NOP 补丁，避免误走双卡分支污染 simulRec/isolate/w28，交由 mpr::SetMovieRecParam 精确置位单卡参数 */
+    logf_("G4_MEDIA: 存储与联锁桥接层全部 Hook 装载完成 (已撤回 0x02b8af5e 双卡分支补丁)");
 }
 
 /* ========================================================================= */
-/* 8. v30 C-API Fsys_* 跨代结构体/错误码翻译与 GOT 全链路桥接层               */
+/* 8. v32 C-API Fsys_* 跨代结构体/错误码翻译与 GOT/DMM 全链路桥接层            */
 /* ========================================================================= */
 
 #define G4MEDIA_FSYS_G5_DRIVE_INFO_SIZE   0x7cu
 #define G4MEDIA_FSYS_G5_FREE_SPACE_SIZE   0x34u
+#define G4MEDIA_DMM_DCF_UNIT_TYPE         0x660u
+#define G4MEDIA_DMM_DCF_SIZE              0x00113898u
+#define G4MEDIA_DMM_DCF_MMAP_SIZE         0x00114000u
+#define G4MEDIA_DMM_HANDLE_BASE           0x7f00u
+#define G4MEDIA_DMM_MAX_SLOTS             16u
+#define G4MEDIA_DCF_SLOT_COUNT            4u
+#define G4MEDIA_DCF_SLOT_STRIDE           0x54e0u
+#define G4MEDIA_MOVIE_REC_PARAM_SIZE      0x188u
+#define G4MEDIA_MOVIE_REMAIN_IN_SIZE      0x3cu
+#define G4MEDIA_DEF_MAIN_VQUALITY         0x0eu /* 50000 kbps */
+#define G4MEDIA_DEF_SUB_VQUALITY          0x1au /* 9000 kbps proxy */
 
-typedef int  (*g4media_mpr_init_fn_t)(const void *init_in_param);
-typedef int  (*g4media_mpr_load_fn_t)(const void *load_in_param);
-typedef int  (*g4media_mpr_set_issue_event_fn_t)(uint32_t evt_id, const void *param, uint32_t size);
-typedef void (*g4media_got_hook_cb_t)(uintptr_t mod_base, uintptr_t got_off, void *new_fn, const char *label);
+typedef int      (*g4media_mpr_init_fn_t)(const void *init_in_param);
+typedef int      (*g4media_mpr_load_fn_t)(const void *load_in_param);
+typedef int      (*g4media_mpr_set_issue_event_fn_t)(uint32_t evt_id, const void *param, uint32_t size);
+typedef int      (*g4media_mpr_get_movie_remain_fn_t)(const void *in_param, void *out_param);
+typedef int      (*g4media_mpr_set_movie_rec_param_fn_t)(const void *param);
+typedef int      (*g4media_mpr_get_movie_rec_param_fn_t)(void *out_param);
+typedef int      (*g4media_mpr_set_playback_param_fn_t)(const void *param);
+typedef int      (*g4media_mpr_get_movie_rec_status_internal_fn_t)(void *out_param);
+typedef int      (*g4media_calc_movie_remain_fn_t)(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
+typedef int      (*g4media_sidb_get_remain_fn_t)(uint32_t slot_id, uint32_t content_type, uint32_t *out_remain);
+typedef struct { uint32_t w[15]; } g4media_mov_remain_in_val_t;
+typedef struct __attribute__((aligned(8))) { uint64_t q[49]; } g4media_movie_rec_val_t;
+typedef int      (*g4media_calc_recordable_time_fn_t)(g4media_mov_remain_in_val_t in_val, uint32_t *out_rem);
+typedef int      (*g4media_rate_check_fn_t)(uint32_t drv_char, g4media_movie_rec_val_t rec_val, uint8_t *out_flag, uint32_t *out_inh);
+typedef void *   (*g4media_dmm_alloc_core_fn_t)(uint32_t unit_type, uint32_t a1, uint32_t cmd, uint32_t a3, void *out_unit, uint32_t flag, void *p_munmap);
+typedef int      (*g4media_dmm_close_and_free_fn_t)(uint32_t unit_handle);
+typedef int      (*g4media_dcf_load_fn_t)(uint32_t slot_idx, uint32_t enable, const void *dir_str, uint32_t r3, uint32_t sp0);
+typedef uint32_t (*g4media_dcf_remain_folders_fn_t)(const void *slot_mask_arr, uint32_t mode, void *out_arr);
+typedef void     (*g4media_got_hook_cb_t)(uintptr_t mod_base, uintptr_t got_off, void *new_fn, const char *label);
 
-static g4media_mpr_init_fn_t            g4media_orig_mpr_init            = NULL;
-static g4media_mpr_load_fn_t            g4media_orig_mpr_load            = NULL;
-static g4media_mpr_set_issue_event_fn_t g4media_orig_mpr_set_issue_event = NULL;
-static g4media_got_hook_cb_t            g4media_custom_got_hook_cb       = NULL;
-static volatile uint32_t                g4media_cfys_log_budget          = 64u;
+typedef struct {
+    void     *addr;
+    size_t    size;
+    uint16_t  handle;
+    uint32_t  unit_type;
+    uint8_t   in_use;
+} g4media_dmm_slot_t;
+
+static g4media_mpr_init_fn_t                         g4media_orig_mpr_init                        = NULL;
+static g4media_mpr_load_fn_t                         g4media_orig_mpr_load                        = NULL;
+static g4media_mpr_set_issue_event_fn_t              g4media_orig_mpr_set_issue_event             = NULL;
+static g4media_mpr_get_movie_remain_fn_t             g4media_orig_mpr_get_movie_remain            = NULL;
+static g4media_mpr_set_movie_rec_param_fn_t          g4media_orig_mpr_set_movie_rec_param         = NULL;
+static g4media_mpr_get_movie_rec_param_fn_t          g4media_orig_mpr_get_movie_rec_param         = NULL;
+static g4media_mpr_set_playback_param_fn_t           g4media_orig_mpr_set_playback_param          = NULL;
+static g4media_mpr_get_movie_rec_status_internal_fn_t g4media_orig_mpr_get_movie_rec_status_internal = NULL;
+static g4media_calc_movie_remain_fn_t                g4media_orig_calc_movie_remain               = NULL;
+static g4media_sidb_get_remain_fn_t                  g4media_orig_sidb_get_remain                 = NULL;
+static g4media_calc_recordable_time_fn_t             g4media_orig_calc_recordable_time            = NULL;
+static g4media_rate_check_fn_t                       g4media_orig_rate_check                      = NULL;
+static g4media_dmm_alloc_core_fn_t                   g4media_orig_dmm_alloc_core                  = NULL;
+static g4media_dmm_close_and_free_fn_t               g4media_orig_dmm_close_and_free              = NULL;
+static g4media_dcf_load_fn_t                         g4media_orig_dcf_load                        = NULL;
+static g4media_dcf_remain_folders_fn_t               g4media_orig_dcf_remain_folders              = NULL;
+static g4media_got_hook_cb_t                         g4media_custom_got_hook_cb                   = NULL;
+static uintptr_t                                     g4media_mp5_base                             = 0u;
+static volatile uint32_t                             g4media_cfys_log_budget                      = 256u;
+static volatile uint32_t                             g4media_movie_diag_budget                    = 96u;
+static volatile uint32_t                             g4media_drive_raw_logged                   = 0u;
+static g4media_dmm_slot_t                            g4media_dmm_slots[G4MEDIA_DMM_MAX_SLOTS];
+static volatile uint32_t                             g4media_dmm_lock                             = 0u;
 
 static inline uint16_t g4media_rd16(const uint8_t *p)
 {
@@ -2122,6 +2171,14 @@ static int g4media_c_fsys_get_drive_info(uint8_t drv_letter, void *out_g5)
               g5 ? (unsigned)g4media_rd32(g5 + 0x58u) : 0u,
               g5 ? (unsigned)g5[0x6cu] : 0u);
     }
+    if (rc == 0 && g4media_upper_drv(drv_letter) == 'A' &&
+        !__sync_lock_test_and_set(&g4media_drive_raw_logged, 1u)) {
+        logf_("G4_MEDIA_DRV_RAW: w0..7=[%08x %08x %08x %08x %08x %08x %08x %08x] w8..13=[%08x %08x %08x %08x %08x %08x]",
+              g4media_rd32(g4_buf + 0x00u), g4media_rd32(g4_buf + 0x04u), g4media_rd32(g4_buf + 0x08u), g4media_rd32(g4_buf + 0x0cu),
+              g4media_rd32(g4_buf + 0x10u), g4media_rd32(g4_buf + 0x14u), g4media_rd32(g4_buf + 0x18u), g4media_rd32(g4_buf + 0x1cu),
+              g4media_rd32(g4_buf + 0x20u), g4media_rd32(g4_buf + 0x24u), g4media_rd32(g4_buf + 0x28u), g4media_rd32(g4_buf + 0x2cu),
+              g4media_rd32(g4_buf + 0x30u), g4media_rd32(g4_buf + 0x34u));
+    }
     return rc;
 }
 
@@ -2253,7 +2310,8 @@ static int g4media_c_fsys_open(const char *path, uint32_t *out_fd, uint32_t mode
     if ((uint32_t)rc == 0x80000030u && path != NULL && out_fd != NULL) {
         mapped_rc = (int)0x80000051u;
     }
-    if (g4media_cfys_take_log_slot(mapped_rc != 0 && mapped_rc != 2)) {
+    if (g4media_cfys_take_log_slot((mapped_rc != 0 && mapped_rc != 2) ||
+                                   (g4media_is_plausible_cstr(path) && strstr(path, "DATABASE") != NULL))) {
         logf_("G4_MEDIA_CFYS: Open('%s', mode=0x%x) -> rc=0x%x%s fd=0x%x",
               g4media_is_plausible_cstr(path) ? path : "", mode, (unsigned)mapped_rc,
               (mapped_rc != rc) ? " (mapped from 0x80000030)" : "",
@@ -2402,6 +2460,34 @@ static int g4media_wrap_mpr_load(const void *load_in_param)
     return rc;
 }
 
+static inline int g4media_take_movie_diag_slot(void)
+{
+    for (;;) {
+        uint32_t cur = __atomic_load_n(&g4media_movie_diag_budget, __ATOMIC_RELAXED);
+        if (cur == 0u) {
+            return 0;
+        }
+        if (__sync_bool_compare_and_swap(&g4media_movie_diag_budget, cur, cur - 1u)) {
+            return 1;
+        }
+    }
+}
+
+static inline void g4media_log_movie_rec_status(const char *tag, int extra_rc)
+{
+    if (!g4media_orig_mpr_get_movie_rec_status_internal) {
+        return;
+    }
+    uint8_t st[0x90];
+    memset(st, 0, sizeof(st));
+    int rc = g4media_orig_mpr_get_movie_rec_status_internal(st);
+    logf_("G4_MEDIA_MOV[%s]: extra=%d st_rc=%d rem0=%u inh0=0x%08x rem1=%u inh1=0x%08x b48=%u w4c=0x%08x",
+          tag, extra_rc, rc,
+          g4media_rd32(st + 0x10u), g4media_rd32(st + 0x50u),
+          g4media_rd32(st + 0x20u), g4media_rd32(st + 0x60u),
+          (unsigned)st[0x48u], g4media_rd32(st + 0x4cu));
+}
+
 static int g4media_wrap_mpr_set_issue_event(uint32_t evt_id, const void *param, uint32_t size)
 {
     if (evt_id == 0x1002u && param != NULL && size >= 0x14u) {
@@ -2409,10 +2495,286 @@ static int g4media_wrap_mpr_set_issue_event(uint32_t evt_id, const void *param, 
         logf_("G4_MEDIA_MPR: SetIssueEvent(0x1002 LoadFinished): r04=0x%x ev_err=0x%x slot=%u err_flag=%u rep_dcf=%u rep_m4=%u",
               g4media_rd32(ep + 0x04u), g4media_rd32(ep + 0x08u), g4media_rd32(ep + 0x0cu),
               (unsigned)ep[0x10u], (unsigned)ep[0x11u], (unsigned)ep[0x12u]);
+    } else if (evt_id == 0x1004u) {
+        const uint8_t *ep = (const uint8_t *)param;
+        if (ep != NULL && size >= 0x10u) {
+            logf_("G4_MEDIA_MOV: SetIssueEvent(0x1004): w0..3=[0x%x 0x%x 0x%x 0x%x]",
+                  g4media_rd32(ep + 0x00u), g4media_rd32(ep + 0x04u),
+                  g4media_rd32(ep + 0x08u), g4media_rd32(ep + 0x0cu));
+        }
+        g4media_log_movie_rec_status("evt1004", 0);
     } else if (g4media_cfys_take_log_slot(0)) {
         logf_("G4_MEDIA_MPR: SetIssueEvent(evt=0x%x, param=%p, size=0x%x)", evt_id, param, size);
     }
     return g4media_orig_mpr_set_issue_event ? g4media_orig_mpr_set_issue_event(evt_id, param, size) : -1;
+}
+
+/* libmp5.so @ 0x25408c mpr::pconv::GetVideoBitrate 查表 (kbps; 0=无效) */
+static inline uint32_t g4media_video_bitrate_kbps(uint32_t vq)
+{
+    static const uint32_t k_vbitrate_kbps[54] = {
+             0u,      0u,  12000u,      0u,      0u,      0u,  16000u,  21000u,
+         25000u,      0u,  60000u,  90000u, 100000u, 150000u,  50000u, 240000u,
+        300000u, 600000u,  35000u, 500000u, 250000u,  80000u, 200000u, 220000u,
+        440000u,  25000u,   9000u,   3000u,   6000u,   2000u,   1000u,  40000u,
+         20000u,  38000u,  70000u,  75000u, 125000u, 140000u, 260000u, 400000u,
+        520000u,  30000u,  13000u,  42000u,  45000u,  84000u, 280000u,  89000u,
+         93000u, 111000u, 185000u, 222000u, 384000u, 480000u
+    };
+    return (vq < (sizeof(k_vbitrate_kbps) / sizeof(k_vbitrate_kbps[0]))) ? k_vbitrate_kbps[vq] : 0u;
+}
+
+/* libmp5.so @ 0x110f54 MovieRemain::GetAudioBitrate 有效区间校验 */
+static inline int g4media_is_valid_audio_param(uint32_t comb, uint32_t ch)
+{
+    return (comb <= 4u && ch >= 1u && ch <= 4u) ? 1 : 0;
+}
+
+static inline uint32_t g4media_sanitize_stream_fields(uint8_t *p_st, uint8_t *p_vq, uint8_t *p_fps,
+                                                      uint8_t *p_ac, uint8_t *p_ach,
+                                                      uint32_t def_vq, uint32_t def_fps,
+                                                      uint32_t def_ac, uint32_t def_ach,
+                                                      uint32_t bit_shift)
+{
+    uint32_t mask = 0u;
+    if (p_st && g4media_rd32(p_st) >= 0xcu) {
+        g4media_wr32(p_st, 1u);
+        mask |= (1u << bit_shift);
+    }
+    if (p_vq && g4media_video_bitrate_kbps(g4media_rd32(p_vq)) == 0u) {
+        g4media_wr32(p_vq, def_vq);
+        mask |= (2u << bit_shift);
+    }
+    if (p_fps && g4media_rd32(p_fps) >= 0xcu) {
+        g4media_wr32(p_fps, def_fps);
+        mask |= (4u << bit_shift);
+    }
+    if (p_ac && p_ach) {
+        uint32_t ac = g4media_rd32(p_ac);
+        uint32_t ach = g4media_rd32(p_ach);
+        if (!g4media_is_valid_audio_param(ac, ach)) {
+            if (ac > 4u) {
+                g4media_wr32(p_ac, def_ac);
+                mask |= (8u << bit_shift);
+            }
+            if (ach < 1u || ach > 4u) {
+                g4media_wr32(p_ach, def_ach);
+                mask |= (16u << bit_shift);
+            }
+        }
+    }
+    return mask;
+}
+
+static inline void g4media_sanitize_movie_rec_param(uint8_t *p, size_t len, uint32_t *out_fixed_mask)
+{
+    uint32_t mask = 0u;
+    if (p != NULL && len >= G4MEDIA_MOVIE_REC_PARAM_SIZE) {
+        /* 严格按原厂字段位宽修正单卡槽属性: +0x00=relay(1B), +0x0c=simul(1B), +0x24=allow(1B), +0x28=mode(4B), +0x38=isolate(1B), +0x156=sub_en(1B) */
+        if (p[0x00u] != 0u) {
+            p[0x00u] = 0u;
+            mask |= (1u << 16);
+        }
+        if (p[0x0cu] != 0u) {
+            p[0x0cu] = 0u;
+            mask |= (1u << 17);
+        }
+        if (p[0x24u] != 1u) {
+            p[0x24u] = 1u;
+            mask |= (1u << 18);
+        }
+        if (g4media_rd32(p + 0x28u) != 0u) {
+            g4media_wr32(p + 0x28u, 0u);
+            mask |= (1u << 19);
+        }
+        if (p[0x38u] != 0u) {
+            p[0x38u] = 0u;
+            mask |= (1u << 20);
+        }
+        mask |= g4media_sanitize_stream_fields(
+            p + 0x128u, p + 0x12cu, p + 0x130u, p + 0x13cu, p + 0x140u,
+            G4MEDIA_DEF_MAIN_VQUALITY, 0u, 0u, 2u, 0u);
+        if (p[0x156u] != 0u) {
+            mask |= g4media_sanitize_stream_fields(
+                p + 0x158u, p + 0x15cu, p + 0x160u, p + 0x16cu, p + 0x170u,
+                G4MEDIA_DEF_SUB_VQUALITY, 6u, 3u, 1u, 5u);
+            p[0x156u] = 0u; /* 严格 1 字节写清，绝不踩踏 +0x158 */
+            mask |= (1u << 21);
+        }
+    }
+    if (out_fixed_mask) {
+        *out_fixed_mask = mask;
+    }
+}
+
+static inline void g4media_sanitize_movie_remain_in(uint8_t *p, size_t len, uint32_t *out_fixed_mask)
+{
+    uint32_t mask = 0u;
+    if (p != NULL && len >= G4MEDIA_MOVIE_REMAIN_IN_SIZE) {
+        mask |= g4media_sanitize_stream_fields(
+            p + 0x0cu, p + 0x14u, p + 0x10u, p + 0x18u, p + 0x1cu,
+            G4MEDIA_DEF_MAIN_VQUALITY, 0u, 0u, 2u, 0u);
+        if (p[0x20u] != 0u) {
+            mask |= g4media_sanitize_stream_fields(
+                p + 0x28u, p + 0x30u, p + 0x2cu, p + 0x34u, p + 0x38u,
+                G4MEDIA_DEF_SUB_VQUALITY, 6u, 3u, 1u, 5u);
+            p[0x20u] = 0u; /* 单卡机关闭双路同时录子流，避免 CalcRecordableTime 因 sub 返回 3 */
+            mask |= (1u << 21);
+        }
+    }
+    if (out_fixed_mask) {
+        *out_fixed_mask = mask;
+    }
+}
+
+static int g4media_wrap_mpr_get_movie_remain(const void *in_param, void *out_param)
+{
+    uint8_t fixed_in[G4MEDIA_MOVIE_REMAIN_IN_SIZE];
+    const void *call_in = in_param;
+    uint32_t fixed_mask = 0u;
+    if (in_param != NULL) {
+        memcpy(fixed_in, in_param, sizeof(fixed_in));
+        g4media_sanitize_movie_remain_in(fixed_in, sizeof(fixed_in), &fixed_mask);
+        if (fixed_mask != 0u) {
+            call_in = fixed_in;
+        }
+    }
+    int rc = g4media_orig_mpr_get_movie_remain ? g4media_orig_mpr_get_movie_remain(call_in, out_param) : -1;
+    if (g4media_take_movie_diag_slot() || fixed_mask != 0u || (out_param && g4media_rd32((const uint8_t *)out_param + 0x04u) == 0u && rc != 0)) {
+        const uint8_t *ip = (const uint8_t *)call_in;
+        const uint8_t *op = (const uint8_t *)out_param;
+        logf_("G4_MEDIA_MOV: GetMovieRemain(in0=%u in4=%u in8=%u vq=0x%x sim=%u sub_vq=0x%x fixed=0x%x) -> rc=%d out=[st=0x%x rem=%u w8=0x%x wc=0x%x w10=0x%x w14=0x%x]",
+              ip ? g4media_rd32(ip + 0x00u) : 0u,
+              ip ? g4media_rd32(ip + 0x04u) : 0u,
+              ip ? g4media_rd32(ip + 0x08u) : 0u,
+              ip ? g4media_rd32(ip + 0x14u) : 0u,
+              ip ? (unsigned)ip[0x20u] : 0u,
+              ip ? g4media_rd32(ip + 0x30u) : 0u,
+              fixed_mask, rc,
+              op ? g4media_rd32(op + 0x00u) : 0u,
+              op ? g4media_rd32(op + 0x04u) : 0u,
+              op ? g4media_rd32(op + 0x08u) : 0u,
+              op ? g4media_rd32(op + 0x0cu) : 0u,
+              op ? g4media_rd32(op + 0x10u) : 0u,
+              op ? g4media_rd32(op + 0x14u) : 0u);
+    }
+    return rc;
+}
+
+static int g4media_wrap_mpr_set_movie_rec_param(const void *param)
+{
+    uint8_t fixed[G4MEDIA_MOVIE_REC_PARAM_SIZE];
+    const void *call_param = param;
+    uint32_t fixed_mask = 0u;
+    uint32_t raw_relay = 0u, raw_iso = 0u, raw_allow = 0u, raw_sim = 0u, raw_sub156 = 0u;
+    uint32_t raw_mvq = 0u, raw_mac = 0u, raw_mach = 0u, raw_svq = 0u;
+    if (param != NULL) {
+        memcpy(fixed, param, sizeof(fixed));
+        raw_relay  = (uint32_t)fixed[0x00u];
+        raw_sim    = (uint32_t)fixed[0x0cu];
+        raw_allow  = (uint32_t)fixed[0x24u];
+        raw_iso    = (uint32_t)fixed[0x38u];
+        raw_sub156 = (uint32_t)fixed[0x156u];
+        raw_mvq    = g4media_rd32(fixed + 0x12cu);
+        raw_mac    = g4media_rd32(fixed + 0x13cu);
+        raw_mach   = g4media_rd32(fixed + 0x140u);
+        raw_svq    = g4media_rd32(fixed + 0x15cu);
+        g4media_sanitize_movie_rec_param(fixed, sizeof(fixed), &fixed_mask);
+        if (fixed_mask != 0u) {
+            call_param = fixed;
+        }
+    }
+    int rc = g4media_orig_mpr_set_movie_rec_param ? g4media_orig_mpr_set_movie_rec_param(call_param) : -1;
+    if (g4media_take_movie_diag_slot() || fixed_mask != 0u) {
+        const uint8_t *p = (const uint8_t *)call_param;
+        logf_("G4_MEDIA_MOV: SetMovieRecParam(slot=0x%x raw=[relay=%u iso=%u allow=%u sim=%u sub156=%u vq=0x%x ac=%u ach=%u svq=0x%x] fix=[relay=%u iso=%u allow=%u sim=%u w28=%u sub156=%u st=%u vq=0x%x fps=%u ac=%u ach=%u] mask=0x%x) -> rc=%d",
+              p ? g4media_rd32(p + 0x04u) : 0u,
+              raw_relay, raw_iso, raw_allow, raw_sim, raw_sub156, raw_mvq, raw_mac, raw_mach, raw_svq,
+              p ? (unsigned)p[0x00u] : 0u, p ? (unsigned)p[0x38u] : 0u,
+              p ? (unsigned)p[0x24u] : 0u, p ? (unsigned)p[0x0cu] : 0u,
+              p ? g4media_rd32(p + 0x28u) : 0u, p ? (unsigned)p[0x156u] : 0u,
+              p ? g4media_rd32(p + 0x128u) : 0u, p ? g4media_rd32(p + 0x12cu) : 0u,
+              p ? g4media_rd32(p + 0x130u) : 0u, p ? g4media_rd32(p + 0x13cu) : 0u,
+              p ? g4media_rd32(p + 0x140u) : 0u,
+              fixed_mask, rc);
+        g4media_log_movie_rec_status("SetMovieRecParam", rc);
+    }
+    return rc;
+}
+
+static int g4media_wrap_mpr_get_movie_rec_param(void *out_param)
+{
+    int rc = g4media_orig_mpr_get_movie_rec_param ? g4media_orig_mpr_get_movie_rec_param(out_param) : -1;
+    if (rc == 0 && out_param != NULL) {
+        uint32_t fixed_mask = 0u;
+        uint8_t *p = (uint8_t *)out_param;
+        g4media_sanitize_movie_rec_param(p, G4MEDIA_MOVIE_REC_PARAM_SIZE, &fixed_mask);
+        if (fixed_mask != 0u && g4media_take_movie_diag_slot()) {
+            logf_("G4_MEDIA_MOV: GetMovieRecParam sanitized(mask=0x%x relay=%u iso=%u allow=%u sim=%u sub156=%u vq=0x%x ac=%u ach=%u)",
+                  fixed_mask, (unsigned)p[0x00u], (unsigned)p[0x38u], (unsigned)p[0x24u],
+                  (unsigned)p[0x0cu], (unsigned)p[0x156u],
+                  g4media_rd32(p + 0x12cu), g4media_rd32(p + 0x13cu), g4media_rd32(p + 0x140u));
+        }
+    }
+    return rc;
+}
+
+static int g4media_wrap_mpr_set_playback_param(const void *param)
+{
+    int rc = g4media_orig_mpr_set_playback_param ? g4media_orig_mpr_set_playback_param(param) : -1;
+    const uint8_t *p = (const uint8_t *)param;
+    logf_("G4_MEDIA_PB: SetPlaybackParam(p0..3=[0x%x 0x%x 0x%x 0x%x]) -> rc=%d",
+          p ? g4media_rd32(p + 0x00u) : 0u, p ? g4media_rd32(p + 0x04u) : 0u,
+          p ? g4media_rd32(p + 0x08u) : 0u, p ? g4media_rd32(p + 0x0cu) : 0u, rc);
+    return rc;
+}
+
+static int g4media_hook_calc_movie_remain(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
+{
+    int rc = g4media_orig_calc_movie_remain ? g4media_orig_calc_movie_remain(a0, a1, a2, a3) : -1;
+    if (g4media_take_movie_diag_slot() || rc != 0) {
+        g4media_log_movie_rec_status("CalcMovieRemain", rc);
+    }
+    return rc;
+}
+
+static int g4media_hook_calc_recordable_time(g4media_mov_remain_in_val_t in_val, uint32_t *out_rem)
+{
+    int rc = g4media_orig_calc_recordable_time ? g4media_orig_calc_recordable_time(in_val, out_rem) : -1;
+    if (g4media_take_movie_diag_slot() || rc != 0) {
+        const uint8_t *ip = (const uint8_t *)in_val.w;
+        logf_("G4_MEDIA_MOV[CalcRecordableTime]: rc=%d out_rem=%u vq=0x%x ac=%u ach=%u sim=%u",
+              rc, out_rem ? *out_rem : 0u,
+              g4media_rd32(ip + 0x14u), g4media_rd32(ip + 0x18u), g4media_rd32(ip + 0x1cu),
+              (unsigned)ip[0x20u]);
+    }
+    return rc;
+}
+
+static int g4media_hook_rate_check(uint32_t drv_char, g4media_movie_rec_val_t rec_val,
+                                   uint8_t *out_flag, uint32_t *out_inh)
+{
+    int rc = g4media_orig_rate_check ? g4media_orig_rate_check(drv_char, rec_val, out_flag, out_inh) : -1;
+    if (g4media_take_movie_diag_slot() || rc != 0 || (out_inh && (*out_inh & 0x400u) != 0u)) {
+        const uint8_t *rp = (const uint8_t *)rec_val.q;
+        uint8_t ch = (uint8_t)(drv_char & 0xffu);
+        logf_("G4_MEDIA_MOV[RateCheck]: drv='%c'(0x%02x) rc=%d flag=%u out_inh=0x%08x relay=%u iso=%u allow=%u sim=%u sub156=%u",
+              (ch >= 0x20u && ch < 0x7fu) ? (int)ch : '.', (unsigned)ch,
+              rc, out_flag ? (unsigned)*out_flag : 0u, out_inh ? *out_inh : 0u,
+              (unsigned)rp[0x00u], (unsigned)rp[0x38u], (unsigned)rp[0x24u],
+              (unsigned)rp[0x0cu], (unsigned)rp[0x156u]);
+    }
+    return rc;
+}
+
+static int g4media_hook_sidb_get_remain(uint32_t slot_id, uint32_t content_type, uint32_t *out_remain)
+{
+    int rc = g4media_orig_sidb_get_remain ? g4media_orig_sidb_get_remain(slot_id, content_type, out_remain) : -1;
+    if (g4media_take_movie_diag_slot() || rc != 0) {
+        logf_("G4_MEDIA_SIDB: sidb::GetRemain(slot=%u type=%u) -> rc=0x%x remain=%u",
+              slot_id, content_type, (unsigned)rc, out_remain ? *out_remain : 0u);
+    }
+    return rc;
 }
 
 static inline void g4media_apply_got_slot(uintptr_t mod_base, uintptr_t got_off, void *new_fn, const char *label)
@@ -2449,11 +2811,146 @@ static inline void g4media_install_got_table(uintptr_t mod_base, const g4media_g
     }
 }
 
+static inline uint8_t *g4media_get_dcf_slots_base(void)
+{
+    if (!g4media_mp5_base) {
+        return NULL;
+    }
+    uintptr_t table_ptr = *(const volatile uintptr_t *)(g4media_mp5_base + 0x002877a0u);
+    if (!table_ptr) {
+        table_ptr = g4media_mp5_base + 0x00b09280u;
+    }
+    return (uint8_t *)table_ptr;
+}
+
+static void *g4media_hook_dmm_alloc_core(uint32_t unit_type, uint32_t a1, uint32_t cmd, uint32_t a3,
+                                         void *out_unit, uint32_t flag, void *p_munmap)
+{
+    void *orig_rc = g4media_orig_dmm_alloc_core
+        ? g4media_orig_dmm_alloc_core(unit_type, a1, cmd, a3, out_unit, flag, p_munmap)
+        : NULL;
+    if (orig_rc != NULL) {
+        return orig_rc;
+    }
+
+    if (cmd == 1u && unit_type == G4MEDIA_DMM_DCF_UNIT_TYPE && out_unit != NULL) {
+        void *buf = mmap(NULL, G4MEDIA_DMM_DCF_MMAP_SIZE, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (buf == MAP_FAILED) {
+            logf_("G4_MEDIA_DMM_ERR: fallback mmap(0x%x) 失败 errno=%d",
+                  (unsigned)G4MEDIA_DMM_DCF_MMAP_SIZE, errno);
+            return NULL;
+        }
+
+        uint16_t handle = 0u;
+        while (__sync_lock_test_and_set(&g4media_dmm_lock, 1u)) {}
+        for (size_t i = 0u; i < G4MEDIA_DMM_MAX_SLOTS; i++) {
+            if (!g4media_dmm_slots[i].in_use) {
+                handle = (uint16_t)(G4MEDIA_DMM_HANDLE_BASE + i);
+                g4media_dmm_slots[i].addr      = buf;
+                g4media_dmm_slots[i].size      = G4MEDIA_DMM_DCF_MMAP_SIZE;
+                g4media_dmm_slots[i].handle    = handle;
+                g4media_dmm_slots[i].unit_type = unit_type;
+                g4media_dmm_slots[i].in_use    = 1u;
+                break;
+            }
+        }
+        __sync_lock_release(&g4media_dmm_lock);
+
+        if (handle == 0u) {
+            munmap(buf, G4MEDIA_DMM_DCF_MMAP_SIZE);
+            logf_("G4_MEDIA_DMM_ERR: 合成句柄表已满 (max=%u)，回退分配失败", (unsigned)G4MEDIA_DMM_MAX_SLOTS);
+            return NULL;
+        }
+
+        uint8_t *uo = (uint8_t *)out_unit;
+        memset(uo, 0, 0x60u);
+        g4media_wr16(uo + 0x04u, handle);
+        g4media_wr32(uo + 0x0cu, unit_type);
+        g4media_wr32(uo + 0x10u, G4MEDIA_DMM_DCF_SIZE);
+        g4media_wr32(uo + 0x14u, (uint32_t)(uintptr_t)buf);
+        g4media_wr32(uo + 0x50u, (uint32_t)(uintptr_t)buf);
+
+        logf_("G4_MEDIA_DMM: fallback mmap for unit_type=0x%x -> handle=0x%04x buf=%p size=0x%x",
+              unit_type, (unsigned)handle, buf, (unsigned)G4MEDIA_DMM_DCF_MMAP_SIZE);
+        return buf;
+    }
+
+    if (cmd == 1u && g4media_cfys_take_log_slot(0)) {
+        logf_("G4_MEDIA_DMM_WARN: dmm_alloc_core(unit_type=0x%x, cmd=%u, out=%p) -> NULL",
+              unit_type, cmd, out_unit);
+    }
+    return NULL;
+}
+
+static int g4media_hook_dmm_close_and_free(uint32_t unit_handle)
+{
+    uint16_t h = (uint16_t)(unit_handle & 0xffffu);
+    if (h >= G4MEDIA_DMM_HANDLE_BASE && h < G4MEDIA_DMM_HANDLE_BASE + G4MEDIA_DMM_MAX_SLOTS) {
+        size_t idx = (size_t)(h - G4MEDIA_DMM_HANDLE_BASE);
+        void *addr = NULL;
+        size_t sz  = 0u;
+        uint32_t utype = 0u;
+        while (__sync_lock_test_and_set(&g4media_dmm_lock, 1u)) {}
+        if (g4media_dmm_slots[idx].in_use && g4media_dmm_slots[idx].handle == h) {
+            addr  = g4media_dmm_slots[idx].addr;
+            sz    = g4media_dmm_slots[idx].size;
+            utype = g4media_dmm_slots[idx].unit_type;
+            g4media_dmm_slots[idx].in_use    = 0u;
+            g4media_dmm_slots[idx].addr      = NULL;
+            g4media_dmm_slots[idx].size      = 0u;
+            g4media_dmm_slots[idx].handle    = 0u;
+            g4media_dmm_slots[idx].unit_type = 0u;
+        }
+        __sync_lock_release(&g4media_dmm_lock);
+
+        if (addr != NULL && sz > 0u) {
+            munmap(addr, sz);
+            logf_("G4_MEDIA_DMM: close_and_free handle=0x%04x unit_type=0x%x -> munmap(%p, 0x%x)",
+                  (unsigned)h, utype, addr, (unsigned)sz);
+            return 0;
+        }
+    }
+    return g4media_orig_dmm_close_and_free ? g4media_orig_dmm_close_and_free(unit_handle) : 0;
+}
+
+static int g4media_hook_dcf_load(uint32_t slot_idx, uint32_t enable, const void *dir_str, uint32_t r3, uint32_t sp0)
+{
+    int rc = g4media_orig_dcf_load ? g4media_orig_dcf_load(slot_idx, enable, dir_str, r3, sp0) : -1;
+    uint8_t *slots = g4media_get_dcf_slots_base();
+    if (slots != NULL && slot_idx < G4MEDIA_DCF_SLOT_COUNT) {
+        const uint8_t *s = slots + (size_t)slot_idx * G4MEDIA_DCF_SLOT_STRIDE;
+        logf_("G4_MEDIA_DCF: DcfNamer::Load(slot=%u en=%u) -> rc=%d loaded=%u handle=0x%04x virt=0x%08x files=0x%08x folders=%u",
+              slot_idx, enable, rc, (unsigned)s[0], (unsigned)g4media_rd16(s + 0x0cu),
+              g4media_rd32(s + 0x58u), g4media_rd32(s + 0x6cu), (unsigned)g4media_rd16(s + 0x74u));
+    } else {
+        logf_("G4_MEDIA_DCF: DcfNamer::Load(slot=%u en=%u) -> rc=%d", slot_idx, enable, rc);
+    }
+    return rc;
+}
+
+static uint32_t g4media_hook_dcf_remain_folders(const void *slot_mask_arr, uint32_t mode, void *out_arr)
+{
+    uint8_t *slots = g4media_get_dcf_slots_base();
+    if (slots != NULL) {
+        for (uint32_t i = 0u; i < G4MEDIA_DCF_SLOT_COUNT; i++) {
+            uint8_t *s = slots + (size_t)i * G4MEDIA_DCF_SLOT_STRIDE;
+            if (s[0] != 0u && g4media_rd32(s + 0x6cu) == 0u) {
+                logf_("G4_MEDIA_DCF_WARN: slot=%u loaded_flag=%u 但 files_ptr=NULL，清除失效标志防崩",
+                      i, (unsigned)s[0]);
+                s[0] = 0u;
+            }
+        }
+    }
+    return g4media_orig_dcf_remain_folders ? g4media_orig_dcf_remain_folders(slot_mask_arr, mode, out_arr) : 0u;
+}
+
 /**
- * @brief 为 appFw.so / libmp5.so / libOb5.so 统一挂载 C-API Fsys_* GOT 适配与 mpr 探针
+ * @brief 为 appFw.so / libmp5.so / libOb5.so 统一挂载 C-API Fsys_* GOT 适配、mpr 探针与 DMM/DCF 修复
  */
 static inline void g4media_install_c_fsys_got_hooks(uintptr_t app_base, uintptr_t mp5_base, uintptr_t ob5_base)
 {
+    g4media_mp5_base = mp5_base;
     static const g4media_got_entry_t mp5_missing6_tbl[] = {
         { 0x002830f8u, (void *)g4media_c_fsys_lock,        "libmp5.so GOT[Fsys_Lock]" },
         { 0x00285c40u, (void *)g4media_c_fsys_combine,     "libmp5.so GOT[Fsys_Combine]" },
@@ -2536,8 +3033,31 @@ static inline void g4media_install_c_fsys_got_hooks(uintptr_t app_base, uintptr_
             g4media_orig_mpr_load = sym ? (g4media_mpr_load_fn_t)sym
                                         : (g4media_mpr_load_fn_t)(mp5_base + 0x000c71b9u);
         }
+        if (!g4media_orig_mpr_get_movie_remain) {
+            void *sym = dlsym(RTLD_DEFAULT, "_ZN3mpr14GetMovieRemainERKNS_21getMovieRemainInParamEPNS_22getMovieRemainOutParamE");
+            g4media_orig_mpr_get_movie_remain = sym ? (g4media_mpr_get_movie_remain_fn_t)sym
+                                                    : (g4media_mpr_get_movie_remain_fn_t)(mp5_base + 0x000dcb61u);
+        }
+        if (!g4media_orig_mpr_set_movie_rec_param) {
+            void *sym = dlsym(RTLD_DEFAULT, "_ZN3mpr16SetMovieRecParamERKNS_13movieRecParamE");
+            g4media_orig_mpr_set_movie_rec_param = sym ? (g4media_mpr_set_movie_rec_param_fn_t)sym
+                                                       : (g4media_mpr_set_movie_rec_param_fn_t)(mp5_base + 0x000eb111u);
+        }
+        if (!g4media_orig_mpr_set_playback_param) {
+            void *sym = dlsym(RTLD_DEFAULT, "_ZN3mpr16SetPlaybackParamERKNS_13playbackParamE");
+            g4media_orig_mpr_set_playback_param = sym ? (g4media_mpr_set_playback_param_fn_t)sym
+                                                      : (g4media_mpr_set_playback_param_fn_t)(mp5_base + 0x000eb0a9u);
+        }
+        if (!g4media_orig_mpr_get_movie_rec_status_internal) {
+            void *sym = dlsym(RTLD_DEFAULT, "_ZN3mpr25GetMovieRecStatusInternalEPNS_25getMovieRecStatusOutParamE");
+            g4media_orig_mpr_get_movie_rec_status_internal = sym ? (g4media_mpr_get_movie_rec_status_internal_fn_t)sym
+                                                                 : (g4media_mpr_get_movie_rec_status_internal_fn_t)(mp5_base + 0x000eb791u);
+        }
         g4media_apply_got_slot(app_base, 0x0377b15cu, (void *)g4media_wrap_mpr_init, "appFw.so GOT[mpr::Init]");
         g4media_apply_got_slot(app_base, 0x0377b428u, (void *)g4media_wrap_mpr_load, "appFw.so GOT[mpr::Load]");
+        g4media_apply_got_slot(app_base, 0x0377b63cu, (void *)g4media_wrap_mpr_get_movie_remain, "appFw.so GOT[mpr::GetMovieRemain]");
+        g4media_apply_got_slot(app_base, 0x0377b654u, (void *)g4media_wrap_mpr_set_movie_rec_param, "appFw.so GOT[mpr::SetMovieRecParam]");
+        g4media_apply_got_slot(app_base, 0x0377b0ccu, (void *)g4media_wrap_mpr_set_playback_param, "appFw.so GOT[mpr::SetPlaybackParam]");
     }
     if (mp5_base) {
         if (!g4media_orig_mpr_set_issue_event) {
@@ -2545,10 +3065,44 @@ static inline void g4media_install_c_fsys_got_hooks(uintptr_t app_base, uintptr_
             g4media_orig_mpr_set_issue_event = sym ? (g4media_mpr_set_issue_event_fn_t)sym
                                                    : (g4media_mpr_set_issue_event_fn_t)(mp5_base + 0x000c05e1u);
         }
+        if (!g4media_orig_mpr_get_movie_rec_param) {
+            void *sym = dlsym(RTLD_DEFAULT, "_ZN3mpr16GetMovieRecParamEPNS_13movieRecParamE");
+            g4media_orig_mpr_get_movie_rec_param = sym ? (g4media_mpr_get_movie_rec_param_fn_t)sym
+                                                       : (g4media_mpr_get_movie_rec_param_fn_t)(mp5_base + 0x000ea501u);
+        }
         g4media_apply_got_slot(mp5_base, 0x002845dcu, (void *)g4media_wrap_mpr_set_issue_event, "libmp5.so GOT[mpr::SetIssueEvent]");
+        g4media_apply_got_slot(mp5_base, 0x00286128u, (void *)g4media_wrap_mpr_get_movie_rec_param, "libmp5.so GOT[mpr::GetMovieRecParam]");
     }
 
-    logf_("G4_MEDIA: v31 C-API Fsys_* GOT 全链路桥接装载完成 (app=%p mp5=%p ob5=%p g4_avail=%d)",
+    if (mp5_base && g4media_custom_got_hook_cb == NULL) {
+        static const uint8_t sig_dmm_alloc_core[8]     = {0x2du, 0xe9u, 0xf0u, 0x4fu, 0x9bu, 0xb0u, 0x00u, 0xafu};
+        static const uint8_t sig_dmm_close_and_free[8] = {0x80u, 0xb5u, 0x04u, 0x21u, 0x00u, 0xafu, 0x02u, 0x22u};
+        static const uint8_t sig_dcf_load[8]           = {0x2du, 0xe9u, 0xf0u, 0x4fu, 0x8bu, 0xb0u, 0x00u, 0xafu};
+        static const uint8_t sig_dcf_remain[8]         = {0x2du, 0xe9u, 0xf0u, 0x4fu, 0x99u, 0xb0u, 0x00u, 0xafu};
+        static const uint8_t sig_calc_movie_remain[8]  = {0x2du, 0xe9u, 0xf0u, 0x4fu, 0xadu, 0xf5u, 0x9cu, 0x6du};
+        static const uint8_t sig_sidb_get_remain[8]     = {0x2du, 0xe9u, 0xf0u, 0x4fu, 0x87u, 0xb0u, 0x00u, 0xafu};
+        static const uint8_t sig_calc_record_time[8]    = {0x84u, 0xb0u, 0x2du, 0xe9u, 0xf0u, 0x4fu, 0x9fu, 0xb0u};
+        static const uint8_t sig_rate_check[8]          = {0x82u, 0xb0u, 0xf0u, 0xb5u, 0xadu, 0xf5u, 0x09u, 0x7du};
+
+        g4media_orig_dmm_alloc_core = (g4media_dmm_alloc_core_fn_t)g4media_install_tramp8(
+            mp5_base + 0x002371b8u, sig_dmm_alloc_core, (void *)g4media_hook_dmm_alloc_core, "libmp5:dmm_alloc_core");
+        g4media_orig_dmm_close_and_free = (g4media_dmm_close_and_free_fn_t)g4media_install_tramp8(
+            mp5_base + 0x00237770u, sig_dmm_close_and_free, (void *)g4media_hook_dmm_close_and_free, "libmp5:dmm_close_and_free");
+        g4media_orig_dcf_load = (g4media_dcf_load_fn_t)g4media_install_tramp8(
+            mp5_base + 0x0010c11cu, sig_dcf_load, (void *)g4media_hook_dcf_load, "libmp5:DcfNamer_Load");
+        g4media_orig_dcf_remain_folders = (g4media_dcf_remain_folders_fn_t)g4media_install_tramp8(
+            mp5_base + 0x0010da50u, sig_dcf_remain, (void *)g4media_hook_dcf_remain_folders, "libmp5:DcfNamer_GetRemainSlotFolders");
+        g4media_orig_calc_movie_remain = (g4media_calc_movie_remain_fn_t)g4media_install_tramp8(
+            mp5_base + 0x001129b8u, sig_calc_movie_remain, (void *)g4media_hook_calc_movie_remain, "libmp5:CalcMovieRemain");
+        g4media_orig_sidb_get_remain = (g4media_sidb_get_remain_fn_t)g4media_install_tramp8(
+            mp5_base + 0x002177bcu, sig_sidb_get_remain, (void *)g4media_hook_sidb_get_remain, "libmp5:sidb_GetRemain");
+        g4media_orig_calc_recordable_time = (g4media_calc_recordable_time_fn_t)g4media_install_tramp8(
+            mp5_base + 0x00111018u, sig_calc_record_time, (void *)g4media_hook_calc_recordable_time, "libmp5:CalcRecordableTime");
+        g4media_orig_rate_check = (g4media_rate_check_fn_t)g4media_install_tramp8(
+            mp5_base + 0x000f49fcu, sig_rate_check, (void *)g4media_hook_rate_check, "libmp5:RateCheck_GetMediaTransferRateInh");
+    }
+
+    logf_("G4_MEDIA: v34 C-API Fsys_* GOT、DMM 0x660/DcfNamer 与 MovieRecParam 规范化桥接装载完成 (app=%p mp5=%p ob5=%p g4_avail=%d)",
           (void *)app_base, (void *)mp5_base, (void *)ob5_base, api->available);
 }
 
