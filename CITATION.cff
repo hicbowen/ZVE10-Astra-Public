@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use, fork, or reference this project, its toolchain, or reverse-engineering documentation in your work, please cite it as below and comply with the GNU GPLv3 license."
+title: "ZVE10-ASTRA-Port"
+authors:
+  - alias: "nolan2628"
+license: "GPL-3.0"
+repository-code: "https://github.com/nolan2628/ZVE10-Astra-Public"
+keywords:
+  - sony
+  - zve10
+  - astra
+  - firmware
+  - qemu
+  - reverse-engineering

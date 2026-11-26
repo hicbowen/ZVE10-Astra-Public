@@ -6,7 +6,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/Audience-Developers%20Only-critical" height="20" alt="Audience: Developers Only">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" height="20" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" height="20" alt="License: GPLv3"></a>
   <a href="https://github.com/nolan2628/ZVE10-Astra-Public/stargazers"><img src="https://img.shields.io/github/stars/nolan2628/ZVE10-Astra-Public?style=flat" height="20" alt="GitHub Stars"></a>
   <a href="https://github.com/nolan2628/ZVE10-Astra-Public/issues"><img src="https://img.shields.io/github/issues/nolan2628/ZVE10-Astra-Public" height="20" alt="GitHub Issues"></a>
   <a href="https://discord.gg/wdF3y3xCYR"><img src="https://img.shields.io/badge/Discord-Join%20Dev%20Chat-5865F2?logo=discord&logoColor=white" height="20" alt="Discord"></a>
@@ -182,4 +182,4 @@ If this project helps your research in Sony camera reverse engineering or cross-
 
 ## License
 
-Code, scripts, and original documentation are licensed under the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attributions.
+This repository (including all code, scripts, and original documentation) is licensed under the **[GNU General Public License v3.0 (GPLv3)](LICENSE)**. Any use, modification, or redistribution of code from this project must preserve copyright and source attribution (see [CITATION.cff](CITATION.cff)) and license derivative works under GPLv3. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attributions.

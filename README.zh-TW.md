@@ -6,7 +6,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/Audience-Developers%20Only-critical" height="20" alt="Audience: Developers Only">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" height="20" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" height="20" alt="License: GPLv3"></a>
   <a href="https://github.com/nolan2628/ZVE10-Astra-Public/stargazers"><img src="https://img.shields.io/github/stars/nolan2628/ZVE10-Astra-Public?style=flat" height="20" alt="GitHub Stars"></a>
   <a href="https://github.com/nolan2628/ZVE10-Astra-Public/issues"><img src="https://img.shields.io/github/issues/nolan2628/ZVE10-Astra-Public" height="20" alt="GitHub Issues"></a>
   <a href="https://discord.gg/wdF3y3xCYR"><img src="https://img.shields.io/badge/Discord-Join%20Dev%20Chat-5865F2?logo=discord&logoColor=white" height="20" alt="Discord"></a>
@@ -182,4 +182,4 @@ uv run python tools/flash/flash_robust.py `
 
 ## License
 
-程式碼、腳本與原創文件採用 [MIT License](LICENSE) 開源；第三方引用見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本儲存庫中的全部程式碼、腳本與原創文件均採用 **[GNU General Public License v3.0 (GPLv3)](LICENSE)** 開源。任何借鑑、修改或二次分發本專案程式碼之衍生作品，均須保留原版權與出處署名（參見 [CITATION.cff](CITATION.cff)）並以相同 GPLv3 授權條款開源；第三方元件聲明見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

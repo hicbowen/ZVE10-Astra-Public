@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Cross-generation porting toolkit, QEMU simulator, and flashing tools to run Sony ZV-1M2 (Gen 5 ASTRA) menu UI and touch interaction on Sony ZV-E10 (Gen 4)."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-only" }
 dependencies = [
     "pyelftools>=0.31",
     "capstone>=5.0.0",

@@ -6,7 +6,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/Audience-Developers%20Only-critical" height="20" alt="Audience: Developers Only">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" height="20" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" height="20" alt="License: GPLv3"></a>
   <a href="https://github.com/nolan2628/ZVE10-Astra-Public/stargazers"><img src="https://img.shields.io/github/stars/nolan2628/ZVE10-Astra-Public?style=flat" height="20" alt="GitHub Stars"></a>
   <a href="https://github.com/nolan2628/ZVE10-Astra-Public/issues"><img src="https://img.shields.io/github/issues/nolan2628/ZVE10-Astra-Public" height="20" alt="GitHub Issues"></a>
   <a href="https://discord.gg/wdF3y3xCYR"><img src="https://img.shields.io/badge/Discord-Join%20Dev%20Chat-5865F2?logo=discord&logoColor=white" height="20" alt="Discord"></a>
@@ -182,4 +182,4 @@ uv run python tools/flash/flash_robust.py `
 
 ## License
 
-コード、スクリプトおよび独自ドキュメントは [MIT License](LICENSE) の下で公開されています。サードパーティ帰属表示は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) をご覧ください。
+本リポジトリのすべてのコード、スクリプト、および独自ドキュメントは **[GNU General Public License v3.0 (GPLv3)](LICENSE)** の下で公開されています。本プロジェクトのコードを参照・改変・再配布する派生プロジェクトでは、著作権表示と出典の明記（[CITATION.cff](CITATION.cff) を参照）および GPLv3 に基づくソースコードの公開が必要です。サードパーティの権利表示は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) をご覧ください。
